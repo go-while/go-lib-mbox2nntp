@@ -1,6 +1,7 @@
-mbox
-====
+# go-lib-mbox2nntp
 
-This package lets software read legacy MBOX-formatted email files.
+This go-lib-mbox2nntp package reads many of the MBOX-formatted usenet archives found at archive.org
 
-Please refer to http://godoc.org/github.com/sam-falvo/mbox for up-to-date documentation.
+[mbox2nntp](https://github.com/go-while/mbox2nntp) uses this lib to read .mbox[.(7z|gz|zip)] archives and send them via IHAVE to a nntp backend.
+
+## Forked from [https://github.com/sam-falvo/mbox](https://github.com/sam-falvo/mbox)
