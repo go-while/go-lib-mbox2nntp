@@ -4,6 +4,7 @@ package mbox
 
 import (
     "io"
+    //"log"
     //"regexp"
     //"github.com/dlclark/regexp2"
 
@@ -86,7 +87,10 @@ func (r *bodyReader) Read(bs []byte) (n int, err error) {
 
     if (len(r.mbox.prefetch) > 6) {
         if retbool, err := validid.MatchString(string(r.mbox.prefetch)); retbool == true && err == nil {
+            //log.Printf("message.go Read() validid.MatchString str='%s'", string(r.mbox.prefetch))
             return 0, io.EOF
+        } else {
+            //log.Printf("!message.go Read() validid.MatchString str='%s' retbool=%t err='%v'", string(r.mbox.prefetch), retbool, err)
         }
     }
 

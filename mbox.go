@@ -14,9 +14,11 @@ import (
 )
 
 var (
-    invalidid = regexp2.MustCompile(`(\%|\;|\,)`, 0)
+    //invalidid = regexp2.MustCompile(`(\%|\;|\,)`, 0)
     //validid = regexp2.MustCompile(`^From\ `, 0)
-    validid = regexp2.MustCompile(`^From\ ([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]+\n$|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]+\n$|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
+    //validid = regexp2.MustCompile(`^From\ (MAILER-DAEMON\ |news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
+    //validid = regexp2.MustCompile(`^From\ (news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
+    validid = regexp2.MustCompile(`^#\!\ rnews\ [0-9]+|^From\ MAILER-DAEMON\ |^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |^From\ ([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
 )
 
 // MboxStream objects represent sequential streams of e-mail messages that
@@ -60,7 +62,7 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     //log.Printf("DEBUG ReadMessage: parseHeaders")
     msg.headers, err = m.parseHeaders()
     if err != nil {
-        log.Printf("ReadMessage: parseHeaders err=%v", err)
+        log.Printf("mbox.go ReadMessage: parseHeaders err='%v' msg='%v'", err, *msg)
         msg = nil
         return
     }
@@ -68,7 +70,7 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     //log.Printf("DEBUG ReadMessage: parseBlankline")
     err = m.parseBlankLine()
     if err != nil {
-        log.Printf("ReadMessage: parseBlankline err=%v", err)
+        log.Printf("mbox.go ReadMessage: parseBlankline err=%v", err)
         msg = nil
         return
     }
@@ -113,7 +115,9 @@ func (m *MboxStream) parseFrom() (who string, err error) {
 }
 
 func extractSendingAddress(m *MboxStream) (who string, err error) {
-    if string(m.prefetch[0:5]) != "From " {
+    //testStr := string(m.prefetch[0:5])
+    //if testStr != "From " {
+    if retbool, err := validid.MatchString(string(m.prefetch)); !retbool || err != nil {
         return "", io.EOF
     }
     if m.prefetchLength < 6 {
@@ -179,7 +183,16 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
         // debug
         //log.Printf("parseHeaders: key=%s values='%s' err='%v'", key, values, err)
         if err != nil {
+            if m.prefetch[0] == '\n' {
+                log.Printf("parseHeaders m.prefetch[0] == newline, break")
+                break
+            }
+            //errstr := fmt.Sprintf("%v", err)
+            //if strings.Contains(errstr, "Colon") {
+            //    continue
+            //}
             return nil, err
+            //continue
         }
         /* fixme
         akey := strings.ToLower(key)
@@ -212,26 +225,31 @@ func (m *MboxStream) parseHeader() ([]string, error) {
     // Therefore, the smallest possible header is K:, which takes up two characters.
     if m.prefetchLength < 2 {
         //return "", nil, m.errorf("Header attribute expected")
-        return nil, m.errorf("Header attribute expected")
+        return nil, m.errorf("parseHeader Header attribute expected | m.prefetch='%s'", m.prefetch)
     }
 
     if isspace(m.prefetch[0]) {
         //return "", nil, m.errorf("Unexpected continuation of a header somehow missed")
-        return nil, m.errorf("Unexpected continuation of a header somehow missed")
-    }
-
-    k := strings.Index(string(m.prefetch), ":")
-    if k < 1 {
-        //return "", nil, m.errorf("Colon not found in expected 'key: value' syntax | m.prefetch='%s'", m.prefetch)
-        return nil, m.errorf("Colon not found in expected 'key: value' syntax | m.prefetch='%s'", m.prefetch)
+        return nil, m.errorf("parseHeader Unexpected continuation of a header somehow missed")
     }
     line := string(m.prefetch)
+    if strings.HasPrefix(line, ": ") {
+        line = "X-Unknown" + line
+    }
+    if strings.HasPrefix(line, "x-no-archive; yes") {
+        line = "x-no-archive: yes"
+    }
+    k := strings.Index(line, ":")
+    if k < 1 {
+        //return "", nil, m.errorf("Colon not found in expected 'key: value' syntax | m.prefetch='%s'", m.prefetch)
+        return nil, m.errorf("parseHeader Colon not found in expected 'key: value' syntax | m.prefetch='%s' line='%s'", m.prefetch, line)
+    }
     var lines []string
     //key := string(m.prefetch[0:k])
     //values := []string{strings.TrimSpace(string(m.prefetch[k+1:]))}
     err := m.nextLine()
     if err != nil {
-        //return "", nil, err
+        log.Printf("parseHeader m.nextLine err='%v'", err)
         return nil, err
     }
     //line = strings.Replace(line,"\r","",-1)
@@ -320,7 +338,7 @@ func isspace(b byte) bool {
 // Observe, however, that CreateMboxStream() succeeding does not imply that it actually is a correctly formatted mbox file.
 func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
     m = &MboxStream{
-        prefetch: make([]byte, 1024000),
+        prefetch: make([]byte, 64*1024),
         r:        bufio.NewReader(s),
     }
 
@@ -346,12 +364,12 @@ func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
 // - All other errors are reported as necessary.
 func (m *MboxStream) nextLine() error {
     sliceb, err := m.r.ReadBytes('\n')
-    line := string(sliceb)
     //line, err := m.r.ReadSlice('\n')
     if err != nil {
         log.Printf("MboxStream nextline error: err='%v'", err)
         return err
     }
+    line := string(sliceb)
     /*
     if len(line) >= 1 {
         switch(line[len(line)-1]) { // switch last char in line
@@ -362,7 +380,7 @@ func (m *MboxStream) nextLine() error {
         } // end switch
     }*/
     // DEBUG
-    //log.Printf("MboxStream nextLine() line='%s'", line)
+    //log.Printf("MboxStream nextLine() line='%s' i=%d", line, m.currentLine)
 
 
     // If slice is longer than the original prefetch, resize.
@@ -370,9 +388,6 @@ func (m *MboxStream) nextLine() error {
         m.prefetch = make([]byte, len(line))
     }
     m.prefetch = m.prefetch[0:len(line)]
-
-
-
     copy(m.prefetch, line)
     m.prefetchLength = len(m.prefetch)
     m.currentLine++
