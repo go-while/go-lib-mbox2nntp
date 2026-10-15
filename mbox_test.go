@@ -1102,8 +1102,10 @@ func TestCRLFBlankLineEndsHeaders(t *testing.T) {
 			t.Errorf("body line %q was parsed as a header", h)
 		}
 	}
-	if got := len(msg.Headers()); got != 2 {
-		t.Errorf("got %d headers %q, want 2", got, msg.Headers())
+	// No line endings in header lines: a '\r' left on one is sent as
+	// "\r\r\n" by an NNTP client that appends CRLF.
+	if want := []string{"Subject: crlf", "Message-ID: <crlf@example>"}; !sameStrings(msg.Headers(), want) {
+		t.Errorf("headers = %q, want %q", msg.Headers(), want)
 	}
 	body, err := io.ReadAll(msg.BodyReader())
 	if err != nil {

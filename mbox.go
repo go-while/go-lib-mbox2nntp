@@ -280,8 +280,9 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
         for _, line := range lines {
             //line = strings.TrimSuffix(line, "\r\n")
             //line = strings.Replace(line,"\r","",-1)
-            line = strings.Replace(line,"\n","",-1)
-            //line = strings.Replace(line,"\r\n","",-1)
+            // strip the line ending, CRLF as well as LF: a surviving '\r'
+            // goes out as "\r\r\n" when the article is sent over NNTP.
+            line = strings.TrimRight(line, "\r\n")
             head = append(head, line)
         }
         //if m.prefetch[0] == '\n' {
