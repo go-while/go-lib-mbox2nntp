@@ -1046,3 +1046,115 @@ func ExampleMessage_BodyReader_savingTheBody() {
 		// Some error occurred; process accordingly.
 	}
 }
+
+// readAll reads every message on mr the way mbox2nntp's iterateMbox does:
+// skip a message that fails to parse, stop at io.EOF. It returns the Subject
+// of each message read and the number of messages skipped.
+func readAll(t *testing.T, mr *MboxStream) (subjects []string, skipped int) {
+	t.Helper()
+	buf := make([]byte, 64*1024)
+	for i := 0; i < 100; i++ {
+		msg, err := mr.ReadMessage()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			skipped++
+			continue
+		}
+		subjects = append(subjects, strings.TrimSpace(headerValue(msg.Headers(), "Subject")))
+		br := msg.BodyReader()
+		for {
+			if _, err := br.Read(buf); err != nil {
+				break
+			}
+		}
+	}
+	t.Fatal("ReadMessage never returned io.EOF")
+	return
+}
+
+// The shape found in 191 of the usenet-clari archives: an LF separator, then a
+// CRLF header block. The body's first line has a colon, so before the fix it
+// was taken as a header, and the next line ended the message with an error.
+const mboxCRLFHeaders = "From -7666732389843091160\n" +
+	"Subject: crlf\r\n" +
+	"Message-ID: <crlf@example>\r\n" +
+	"\r\n" +
+	"Romans 3:10\r\n" +
+	"As it is written\r\n" +
+	"From -7666732389843091161\n" +
+	"Subject: after\n" +
+	"\n" +
+	"body\n"
+
+func TestCRLFBlankLineEndsHeaders(t *testing.T) {
+	mr, err := CreateMboxStream(strings.NewReader(mboxCRLFHeaders))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mr.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	for _, h := range msg.Headers() {
+		if strings.HasPrefix(h, "Romans") {
+			t.Errorf("body line %q was parsed as a header", h)
+		}
+	}
+	if got := len(msg.Headers()); got != 2 {
+		t.Errorf("got %d headers %q, want 2", got, msg.Headers())
+	}
+	body, err := io.ReadAll(msg.BodyReader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Romans 3:10\r\nAs it is written\r\n"; string(body) != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+
+	mr, err = CreateMboxStream(strings.NewReader(mboxCRLFHeaders))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjects, skipped := readAll(t, mr)
+	if !sameStrings(subjects, []string{"crlf", "after"}) || skipped != 0 {
+		t.Errorf("read %q, skipped %d; want [crlf after], 0", subjects, skipped)
+	}
+}
+
+// One message with a header block that never ends must cost that message
+// only, not every message after it in the file.
+func TestResyncAfterMalformedHeaders(t *testing.T) {
+	const sep = "From nobody Thu Dec  8 12:55:04 2016\n"
+	cases := []struct {
+		name    string
+		input   string
+		want    []string
+		skipped int
+	}{
+		{"middle", sep + "Subject: one\n\nbody\n" +
+			sep + "Subject: two\nno colon, no blank line\nFrom the body\n" +
+			sep + "Subject: three\n\nbody\n" +
+			sep + "Subject: four\n\nbody\n",
+			[]string{"one", "three", "four"}, 1},
+		{"last", sep + "Subject: one\n\nbody\n" +
+			sep + "Subject: two\nno colon, no blank line\n",
+			[]string{"one"}, 1},
+		{"two in a row", sep + "Subject: one\n\nbody\n" +
+			sep + "Subject: two\nbad\n" +
+			sep + "Subject: three\nbad\n" +
+			sep + "Subject: four\n\nbody\n",
+			[]string{"one", "four"}, 2},
+	}
+	for _, c := range cases {
+		mr, err := CreateMboxStream(strings.NewReader(c.input))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		subjects, skipped := readAll(t, mr)
+		if !sameStrings(subjects, c.want) || skipped != c.skipped {
+			t.Errorf("%s: read %q, skipped %d; want %q, %d", c.name, subjects, skipped, c.want, c.skipped)
+		}
+	}
+}

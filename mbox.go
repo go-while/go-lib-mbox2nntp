@@ -110,6 +110,10 @@ func (m *MboxStream) recordNearMiss() {
 // reading the next.  Otherwise, a framing error will cause the reader to
 // return io.EOF prematurely.  See the SkippingTheBody example for a simple
 // example showing how to do this simply.
+//
+// A message whose headers cannot be parsed is reported as an error, and the
+// stream is moved on to the next separator line, so the caller may skip the
+// error and call ReadMessage again to carry on with the next message.
 func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     var h []string
     msg = &Message{
@@ -131,6 +135,7 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     if err != nil {
         log.Printf("mbox.go ReadMessage: parseHeaders err='%v' msg='%v'", err, *msg)
         msg = nil
+        m.resync()
         return
     }
 
@@ -139,6 +144,7 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     if err != nil {
         log.Printf("mbox.go ReadMessage: parseBlankline err=%v", err)
         msg = nil
+        m.resync()
         return
     }
 
@@ -161,7 +167,7 @@ func (m *MboxStream) parseBlankLine() error {
     //log.Printf("parseBlankLine m.prefetch len=%d", len(m.prefetch))
 
     //if len(m.prefetch) > 1 || m.prefetch[0] != '\n' {
-    if len(m.prefetch) > 0 && m.prefetch[0] != '\n' {
+    if len(m.prefetch) > 0 && !isBlankLine(m.prefetch) {
         return m.errorf("Blank line expected")
     }
     return m.nextLine()
@@ -253,7 +259,7 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
         // debug
         //log.Printf("parseHeaders: key=%s values='%s' err='%v'", key, values, err)
         if err != nil {
-            if m.prefetch[0] == '\n' {
+            if isBlankLine(m.prefetch) {
                 log.Printf("parseHeaders m.prefetch[0] == newline, break")
                 break
             }
@@ -279,7 +285,7 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
             head = append(head, line)
         }
         //if m.prefetch[0] == '\n' {
-        if len(m.prefetch) == 0 || m.prefetch[0] == '\n' {
+        if len(m.prefetch) == 0 || isBlankLine(m.prefetch) {
             break
         }
     }
@@ -340,7 +346,9 @@ func (m *MboxStream) parseHeader() ([]string, error) {
     lines = append(lines, line)
     for {
         // Continuation lines consist of at least one whitespace and at least one regular character.
-        if (m.prefetchLength < 2) || (!isspace(m.prefetch[0])) {
+        // isspace counts '\r' as whitespace, so a CRLF blank line would
+        // otherwise be taken as a continuation and the body read as headers.
+        if (m.prefetchLength < 2) || (!isspace(m.prefetch[0])) || isBlankLine(m.prefetch) {
             //log.Printf("break read header continuation key='%s' values='%s'", key, values)
             break
         }
@@ -400,6 +408,29 @@ func (m *MboxStream) parseHeaderOLD() (key string, values []string, err error) {
 
 func isspace(b byte) bool {
     return b < 33
+}
+
+// isBlankLine reports whether p is the empty line that ends a header block,
+// with either an LF or a CRLF line ending.
+func isBlankLine(p []byte) bool {
+    return (len(p) == 1 && p[0] == '\n') || (len(p) == 2 && p[0] == '\r' && p[1] == '\n')
+}
+
+// resync advances to the next line validid accepts, or to the end of input.
+// ReadMessage calls it after a malformed message: without it the stream is
+// left inside that message, the next ReadMessage finds no separator, and
+// returns io.EOF, silently ending the file there.
+func (m *MboxStream) resync() {
+    for {
+        if couldBeSep(m.prefetch) {
+            if ok, err := validid.MatchString(string(m.prefetch)); ok && err == nil {
+                return
+            }
+        }
+        if m.nextLine() != nil {
+            return
+        }
+    }
 }
 
 // CreateMboxStream decorates an io.Reader instance with an mbox parser.
