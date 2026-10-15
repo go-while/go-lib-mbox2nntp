@@ -817,6 +817,115 @@ func BenchmarkValididGatedBodyLine(b *testing.B)  { benchGated(b, benchBodyLine)
 func BenchmarkValididBareSeparator(b *testing.B)  { benchBare(b, benchSeparator) }
 func BenchmarkValididGatedSeparator(b *testing.B) { benchGated(b, benchSeparator) }
 
+// drainMessages reads every message on mr, consuming each body through a
+// buffer of bufSize bytes, and returns the number of messages read.
+func drainMessages(t *testing.T, mr *MboxStream, bufSize int) int {
+	t.Helper()
+	n := 0
+	buf := make([]byte, bufSize)
+	for {
+		msg, err := mr.ReadMessage()
+		if err == io.EOF {
+			return n
+		}
+		if err != nil {
+			t.Fatalf("ReadMessage after %d messages: %v", n, err)
+		}
+		n++
+		br := msg.BodyReader()
+		for {
+			if _, err := br.Read(buf); err != nil {
+				break
+			}
+		}
+	}
+}
+
+const mboxWithNearMisses = `From nobody Thu Dec  8 12:55:04 2016
+Subject: one
+
+From here on, everything is different.
+From user@domain.com Thu Dec  8 12:55:04 2016
+Subject: merged
+
+#! rnews abc
+plain body
+From nobody Thu Dec  8 12:55:05 2016
+Subject: two
+
+body two
+`
+
+// TestNearMisses checks the J4 instrumentation: body lines that pass the
+// couldBeSep gate but fail validid are counted and sampled, with line numbers,
+// and real separators are not.
+//
+// Line 5 is the case the counter exists for: a real separator in a shape
+// validid does not know, which merges the second article into the first.  The
+// message count of 2 rather than 3 is that merge, observed.
+func TestNearMisses(t *testing.T) {
+	for _, bufSize := range []int{64 * 1024, 8} {
+		mr, err := CreateMboxStream(strings.NewReader(mboxWithNearMisses))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := drainMessages(t, mr, bufSize); got != 2 {
+			t.Errorf("bufSize=%d: read %d messages, want 2 (line 5 is merged)", bufSize, got)
+		}
+		count, samples := mr.NearMisses()
+		want := []NearMiss{
+			{4, "From here on, everything is different."},
+			{5, "From user@domain.com Thu Dec  8 12:55:04 2016"},
+			{8, "#! rnews abc"},
+		}
+		// With an 8-byte buffer every line above spans several Read calls,
+		// which is where a near-miss would be counted more than once.
+		if count != len(want) {
+			t.Errorf("bufSize=%d: NearMisses count = %d, want %d", bufSize, count, len(want))
+		}
+		if len(samples) != len(want) {
+			t.Fatalf("bufSize=%d: samples = %+v, want %+v", bufSize, samples, want)
+		}
+		for i := range want {
+			if samples[i] != want[i] {
+				t.Errorf("bufSize=%d: sample[%d] = %+v, want %+v", bufSize, i, samples[i], want[i])
+			}
+		}
+	}
+}
+
+// TestNearMissesSampleLimits checks that the count keeps going past the sample
+// cap, that long lines are cut, and that the returned slice is a copy.
+func TestNearMissesSampleLimits(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("From nobody Thu Dec  8 12:55:04 2016\nSubject: x\n\n")
+	b.WriteString("From " + strings.Repeat("x", 300) + "\n")
+	for i := 0; i < 6; i++ {
+		fmt.Fprintf(&b, "From the desk of correspondent %d\n", i)
+	}
+	mr, err := CreateMboxStream(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainMessages(t, mr, 64*1024)
+
+	count, samples := mr.NearMisses()
+	if count != 7 {
+		t.Errorf("count = %d, want 7", count)
+	}
+	if len(samples) != nearMissMaxSamples {
+		t.Errorf("len(samples) = %d, want %d", len(samples), nearMissMaxSamples)
+	}
+	if len(samples) > 0 && len(samples[0].Text) != nearMissMaxText {
+		t.Errorf("long line kept %d bytes, want %d", len(samples[0].Text), nearMissMaxText)
+	}
+
+	samples[0].Text = "clobbered"
+	if _, again := mr.NearMisses(); again[0].Text == "clobbered" {
+		t.Error("NearMisses returned the stream's own slice, not a copy")
+	}
+}
+
 /* *** Examples *** */
 
 func ExampleMboxStream() {

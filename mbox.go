@@ -51,6 +51,50 @@ type MboxStream struct {
     prefetchLength int
     currentLine    int
     r              *bufio.Reader
+
+    nearMisses     int
+    nearMissSample []NearMiss
+}
+
+// A NearMiss is a body line that passed couldBeSep -- it starts with "From " or
+// "#! rnews " -- but that validid then rejected, so it was kept as body text.
+//
+// Each one is either ordinary prose that happens to start with "From ", or a
+// real message separator in a shape validid does not know, in which case the
+// following article has been merged into the current one.  The count cannot
+// tell those apart; the samples let a human do it in seconds.
+type NearMiss struct {
+    Line int    // 1-based line number in the input
+    Text string // the line, trailing CR/LF removed, cut to nearMissMaxText bytes
+}
+
+const (
+    nearMissMaxSamples = 5
+    nearMissMaxText    = 200
+)
+
+// NearMisses reports how many body lines on this stream looked like a message
+// separator but did not match validid, together with the first few of them.
+//
+// Point this at one file from each new archive collection before importing it:
+// a non-zero count with separator-shaped samples means validid needs another
+// branch, and the import would otherwise silently merge articles.
+func (m *MboxStream) NearMisses() (count int, samples []NearMiss) {
+    out := make([]NearMiss, len(m.nearMissSample))
+    copy(out, m.nearMissSample)
+    return m.nearMisses, out
+}
+
+func (m *MboxStream) recordNearMiss() {
+    m.nearMisses++
+    if len(m.nearMissSample) >= nearMissMaxSamples {
+        return
+    }
+    text := strings.TrimRight(string(m.prefetch), "\r\n")
+    if len(text) > nearMissMaxText {
+        text = text[:nearMissMaxText]
+    }
+    m.nearMissSample = append(m.nearMissSample, NearMiss{Line: m.currentLine, Text: text})
 }
 
 // The ReadMessage method parses the input for another complete message.  A

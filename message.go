@@ -91,12 +91,17 @@ func (r *bodyReader) Read(bs []byte) (n int, err error) {
     // len(prefetch) > 6 guard, which was left over from a prefetch[0:5] slice
     // that no longer exists: no shape validid accepts is shorter than 10 bytes,
     // so that bound never did anything.
-    if couldBeSep(r.mbox.prefetch) {
+    //
+    // Only test at the start of a line.  A line longer than bs comes back over
+    // several Read calls with r.where > 0; prefetch has not changed, so the
+    // verdict cannot either, and re-testing would count a near-miss twice.
+    if r.where == 0 && couldBeSep(r.mbox.prefetch) {
         if retbool, err := validid.MatchString(string(r.mbox.prefetch)); retbool == true && err == nil {
             //log.Printf("message.go Read() validid.MatchString str='%s'", string(r.mbox.prefetch))
             return 0, io.EOF
-        } else {
-            //log.Printf("!message.go Read() validid.MatchString str='%s' retbool=%t err='%v'", string(r.mbox.prefetch), retbool, err)
+        } else if err == nil {
+            // Passed the gate, failed the regex: this line stays in the body.
+            r.mbox.recordNearMiss()
         }
     }
 
