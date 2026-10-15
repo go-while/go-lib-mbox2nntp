@@ -1207,3 +1207,41 @@ func TestSepPatternsMatchOldValidid(t *testing.T) {
 		}
 	}
 }
+
+// I3: the last line of a file with no final newline was dropped by nextLine,
+// with the error that came with it.
+func TestFinalLineWithoutNewline(t *testing.T) {
+	const in = "From nobody Thu Dec  8 12:55:04 2016\n" +
+		"Subject: one\n" +
+		"Message-ID: <one@example>\n" +
+		"\n" +
+		"first\n" +
+		"last line, no newline"
+	mr, err := CreateMboxStream(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mr.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	body, err := io.ReadAll(msg.BodyReader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "first\nlast line, no newline\n"; string(body) != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+	if _, err := mr.ReadMessage(); err != io.EOF {
+		t.Errorf("after the last message: err = %v, want io.EOF", err)
+	}
+
+	// The same for a file that ends inside the headers of its last message.
+	mr, err = CreateMboxStream(strings.NewReader("From nobody Thu Dec  8 12:55:04 2016\nSubject: two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mr.ReadMessage(); err == nil {
+		t.Error("headers cut off by EOF: ReadMessage returned no error")
+	}
+}

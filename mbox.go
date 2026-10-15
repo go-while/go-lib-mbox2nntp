@@ -487,6 +487,12 @@ func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
 func (m *MboxStream) nextLine() error {
     sliceb, err := m.r.ReadBytes('\n')
     //line, err := m.r.ReadSlice('\n')
+    if err == io.EOF && len(sliceb) > 0 {
+        // The last line of a file that does not end in a newline. It used
+        // to be dropped along with the error; terminate it like the others.
+        // The next call gets io.EOF with nothing read.
+        sliceb, err = append(sliceb, '\n'), nil
+    }
     if err != nil {
         log.Printf("MboxStream nextline error: err='%v'", err)
         return err
