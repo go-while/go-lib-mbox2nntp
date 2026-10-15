@@ -19,8 +19,28 @@ var (
     //validid = regexp2.MustCompile(`^From\ `, 0)
     //validid = regexp2.MustCompile(`^From\ (MAILER-DAEMON\ |news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
     //validid = regexp2.MustCompile(`^From\ (news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
-    validid = regexp2.MustCompile(`^#\!\ rnews\ [0-9]+|^From\ MAILER-DAEMON\ |^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |^From\ ([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
+    validid = regexp2.MustCompile(strings.Join(sepPatterns, "|"), 0)
 )
+
+// sepPatterns are the message-separator shapes validid accepts, one per
+// alternative.  Each must stay anchored to "^From " or "^#! rnews " (see
+// couldBeSep).  None is anchored at the end: "From " followed by eight digits
+// accepts any longer number too.
+//
+// A shape missing here merges every message that uses it into the one before;
+// a shape that also matches ordinary text splits a body there.  So add one
+// only for a collection that needs it, and run NearMisses over that collection
+// first.
+var sepPatterns = []string{
+    `^#\!\ rnews\ [0-9]+`,                                    // rnews batch files
+    `^From\ MAILER-DAEMON\ `,                                 // bounces
+    `^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ `, // gmane: "From news@gmane.org Thu Dec  8 ..."
+    `^From\ [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]`,         // usenet-clari: "From 191826460637372077"
+    `^From\ -[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]`,        // usenet-clari: "From -191826460637372077"
+    `^From\ nobody\ [A-Z][a-z][a-z]\s+[0-9]`,                 // "From nobody Thu  8 Dec 2016"
+    `^From\ nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ `,      // gna-clari: "From nobody Thu Dec  8 12:55:04 2016"
+    `^From\ nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4}`, // "From nobody Thu Dec\t12:55:04 2016": no day; differs from the one above only when the gap is not one space
+}
 
 // Every alternative in validid is anchored to "^From " or "^#! rnews ", so a
 // line starting with neither cannot possibly match.  couldBeSep checks that in

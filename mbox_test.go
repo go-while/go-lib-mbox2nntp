@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/dlclark/regexp2"
 )
 
 // NOTE ON FIXTURES
@@ -1157,6 +1159,51 @@ func TestResyncAfterMalformedHeaders(t *testing.T) {
 		subjects, skipped := readAll(t, mr)
 		if !sameStrings(subjects, c.want) || skipped != c.skipped {
 			t.Errorf("%s: read %q, skipped %d; want %q, %d", c.name, subjects, skipped, c.want, c.skipped)
+		}
+	}
+}
+
+// valididBeforeJ5 is validid as one literal, before it was split into
+// sepPatterns.  TestSepPatternsMatchOldValidid keeps the split honest.
+const valididBeforeJ5 = `^#\!\ rnews\ [0-9]+|^From\ MAILER-DAEMON\ |^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |^From\ ([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`
+
+func TestSepPatternsMatchOldValidid(t *testing.T) {
+	old := regexp2.MustCompile(valididBeforeJ5, 0)
+	lines := append([]string{}, gateCorpus...)
+	lines = append(lines,
+		"From MAILER-DAEMON I got this bounce:",
+		"From nobody Thu 3 people replied",
+		"From nobody Thu Dec\t12:55:04 2016",
+		"From nobody Thu Dec 12:55:04 2016",
+		"From nobody Thu Dec\t\t8 12:55:04 2016",
+		"From nobody Thu\t8 Dec 2016",
+		"From nobody thu Dec  8 12:55:04 2016",
+		"From 12345678",
+		"From -12345678",
+		"From -1234567",
+		"From ???@??? Thu Dec  8 12:55:04 2016",
+		"#! rnews ",
+		"#! rnews x",
+		"#!rnews 1234",
+	)
+	for _, full := range append(acceptedShapes, lines...) {
+		for i := 0; i <= len(full); i++ {
+			lines = append(lines, full[:i])
+		}
+	}
+	for _, p := range sepPatterns {
+		if !strings.HasPrefix(p, `^From\ `) && !strings.HasPrefix(p, `^#\!\ rnews\ `) {
+			t.Errorf("pattern %q is not anchored to a prefix couldBeSep knows", p)
+		}
+	}
+	for _, line := range lines {
+		want, err1 := old.MatchString(line)
+		got, err2 := validid.MatchString(line)
+		if err1 != nil || err2 != nil {
+			t.Fatalf("%q: errors %v, %v", line, err1, err2)
+		}
+		if got != want {
+			t.Errorf("validid(%q) = %v, before J5 it was %v", line, got, want)
 		}
 	}
 }
