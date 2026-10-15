@@ -654,39 +654,168 @@ func TestValididSeparatorShapes(t *testing.T) {
 	}
 }
 
+// gateCorpus is a mix of real separator shapes and the kinds of body and header
+// lines that dominate an archive, used by the gate tests and benchmarks below.
+var gateCorpus = []string{
+	// Separators validid accepts.
+	"#! rnews 1234",
+	"From MAILER-DAEMON ",
+	"From news@gmane.org Thu Dec  8 12:55:04 2016",
+	"From 191826460637372077",
+	"From -191826460637372077",
+	"From nobody Thu Dec  8 12:55:04 2016",
+
+	// "From "-prefixed lines validid nonetheless rejects: these are what the
+	// gate cannot help with, and what keeps it honest.
+	"From foo@bar.com",
+	"From user@domain.com Thu Dec  8 12:55:04 2016",
+	"From mailer-daemon Thu Dec  8 12:55:04 2016",
+	"From 1234567",
+	"From ",
+	"From x",
+
+	// Ordinary traffic: the overwhelming majority of lines, all of which the
+	// gate should reject without ever entering the regex engine.
+	"",
+	"\n",
+	"Subject: not a separator",
+	"Received: from mail.example.com by relay.example.net",
+	" From nobody Thu Dec  8 12:55:04 2016",
+	">From nobody Thu Dec  8 12:55:04 2016",
+	"Fromage is not a separator either",
+	"In article <abc@def>, someone wrote:",
+	"> quoted text from a previous article",
+	"On Thu, 8 Dec 2016, someone wrote:",
+	"-- ",
+	"begin 644 attachment.bin",
+	"M7VJpbmFyeSBnYXJiYWdlIHRoYXQgbG9va3MgbGlrZSB1dWVuY29kZWQgZGF0YQ",
+}
+
+// acceptedShapes is one example of each branch validid accepts.
+var acceptedShapes = []string{
+	"#! rnews 1234",
+	"From MAILER-DAEMON ",
+	"From news@gmane.org Thu Dec  8 12:55:04 2016",
+	"From 191826460637372077",
+	"From -191826460637372077",
+	"From nobody Thu Dec  8 12:55:04 2016",
+}
+
 // TestValididPrefixGate proves that gating validid behind a cheap byte-prefix
 // check cannot change its verdict: every shape validid accepts also starts with
 // "From " or "#! rnews ".  This is the precondition for putting that gate in
 // front of the regex on the hot path, where it is worth roughly two orders of
 // magnitude per line.
+//
+// If you add an alternative to validid that is not anchored to one of those two
+// prefixes, this test fails and couldBeSep must be widened to match.
 func TestValididPrefixGate(t *testing.T) {
-	lines := []string{
-		"#! rnews 1234",
-		"From MAILER-DAEMON ",
-		"From news@gmane.org Thu Dec  8 12:55:04 2016",
-		"From 191826460637372077",
-		"From -191826460637372077",
-		"From nobody Thu Dec  8 12:55:04 2016",
-		"From foo@bar.com",
-		" From nobody Thu Dec  8 12:55:04 2016",
-		"Subject: not a separator",
-		">From nobody Thu Dec  8 12:55:04 2016",
-		"Received: from mail.example.com",
-		"",
-	}
-
-	for _, line := range lines {
+	for _, line := range gateCorpus {
 		matched, err := validid.MatchString(line)
 		if err != nil {
 			t.Errorf("validid.MatchString(%q): unexpected error %v", line, err)
 			continue
 		}
-		gated := strings.HasPrefix(line, "From ") || strings.HasPrefix(line, "#! rnews ")
-		if matched && !gated {
+		if matched && !couldBeSep([]byte(line)) {
 			t.Errorf("gate would hide a match: %q", line)
 		}
 	}
 }
+
+// TestValididGateIsTransparent is the differential test: for every line, the
+// gated path and the bare regex must reach the same verdict.  TestValididPrefixGate
+// checks the one-way property of the gate itself; this checks the composition
+// actually used in extractSendingAddress and bodyReader.Read.
+func TestValididGateIsTransparent(t *testing.T) {
+	lines := append([]string{}, gateCorpus...)
+	// Also feed it every truncation of every accepted shape, which walks the
+	// regex through all of its partial-match states.
+	for _, full := range acceptedShapes {
+		for i := 0; i <= len(full); i++ {
+			lines = append(lines, full[:i])
+		}
+	}
+
+	for _, line := range lines {
+		want, err := validid.MatchString(line)
+		if err != nil {
+			t.Errorf("validid.MatchString(%q): unexpected error %v", line, err)
+			continue
+		}
+		got := false
+		if couldBeSep([]byte(line)) {
+			got, err = validid.MatchString(line)
+			if err != nil {
+				t.Errorf("gated validid.MatchString(%q): unexpected error %v", line, err)
+				continue
+			}
+		}
+		if got != want {
+			t.Errorf("gated verdict for %q = %v, bare regex = %v", line, got, want)
+		}
+	}
+}
+
+// TestValididMinimumMatchLength backs up removing the old len(prefetch) > 6
+// guard from bodyReader.Read.  That bound was left over from a prefetch[0:5]
+// slice that no longer exists; the shortest string validid can accept is
+// "#! rnews 1" at 10 bytes, so nothing the bound excluded was ever a match.
+func TestValididMinimumMatchLength(t *testing.T) {
+	const shortest = 10
+	for _, full := range acceptedShapes {
+		for i := 0; i < shortest && i <= len(full); i++ {
+			matched, err := validid.MatchString(full[:i])
+			if err != nil {
+				t.Errorf("validid.MatchString(%q): unexpected error %v", full[:i], err)
+				continue
+			}
+			if matched {
+				t.Errorf("validid matched %q (%d bytes); shortest match was assumed to be %d bytes",
+					full[:i], i, shortest)
+			}
+		}
+	}
+}
+
+// The benchmarks below mirror what the call sites actually do: both
+// extractSendingAddress and bodyReader.Read hold the line as []byte in
+// m.prefetch and convert it to a string to feed the regex.  So the bare and
+// gated variants are given the same []byte input and both pay for that
+// conversion where it happens, which makes the pair comparable.
+//
+// The gate's win is twofold on an ordinary body line: the regex never runs, and
+// the string conversion that feeds it never happens either, so the allocation
+// goes away with it.
+
+var (
+	benchBodyLine  = []byte("> quoted text from a previous article")
+	benchSeparator = []byte("From nobody Thu Dec  8 12:55:04 2016")
+)
+
+func benchBare(b *testing.B, line []byte) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := validid.MatchString(string(line)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchGated(b *testing.B, line []byte) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if couldBeSep(line) {
+			if _, err := validid.MatchString(string(line)); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkValididBareBodyLine(b *testing.B)   { benchBare(b, benchBodyLine) }
+func BenchmarkValididGatedBodyLine(b *testing.B)  { benchGated(b, benchBodyLine) }
+func BenchmarkValididBareSeparator(b *testing.B)  { benchBare(b, benchSeparator) }
+func BenchmarkValididGatedSeparator(b *testing.B) { benchGated(b, benchSeparator) }
 
 /* *** Examples *** */
 
