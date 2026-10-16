@@ -455,9 +455,10 @@ func (m *MboxStream) resync() {
 }
 
 // CreateMboxStream decorates an io.Reader instance with an mbox parser.
-// It will produce an io.EOF if the file doesn't appear to be an mbox-formatted file.
-// It determines this by verifying the first five characters of the file matches "From " (note the space).
-// Observe, however, that CreateMboxStream() succeeding does not imply that it actually is a correctly formatted mbox file.
+// It returns io.EOF if the input is empty (with a nil stream), or if its first
+// line is not a separator validid accepts.  Observe, however, that
+// CreateMboxStream() succeeding does not imply that it actually is a correctly
+// formatted mbox file.
 func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
     m = &MboxStream{
         prefetch: make([]byte, 64*1024),

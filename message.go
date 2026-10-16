@@ -36,32 +36,24 @@ func (m *Message) Sender() string {
     return m.sendingAddress
 }
 
-// The Headers method provides raw access to the headers of a message.
-// Applications identify headers by a name string.  Each header contains one or
-// more value strings, each string corresponding to a line in the MIME header
-// text.  For example, given the following two headers:
+// The Headers method returns the header lines of a message in file order,
+// without their line endings.  A continuation line is an entry of its own,
+// keeping its leading whitespace; trailing whitespace is removed.  Given
 //
 //     Subject: Code Review
 //     X-Trace-Token: DEADBEEF-FEED-FACE-0123-45-67-89-AB-CD-EF;
 //             user_id=sfalvo
 //
-// then we would find the following truths:
+// Headers returns
 //
-//     // hs := msg.Headers()
-//     len(hs) == 2
-//     len(hs["Subject"]) == 1
-//     len(hs["X-Trace-Token"]) == 2
-//     hs["Subject"] == []string{"Code Review"}
-//     hs["X-Trace-Token"] == []string{
-//             "DEADBEEF-FEED-FACE-0123-45-67-89-AB-CD-EF;",
-//             "\tuser_id=sfalvo"
+//     []string{
+//             "Subject: Code Review",
+//             "X-Trace-Token: DEADBEEF-FEED-FACE-0123-45-67-89-AB-CD-EF;",
+//             "        user_id=sfalvo",
 //     }
 //
-// Observe that the header values that continue onto subsequent lines preserve
-// any whitespace used.  Again, this is a conscious decision to preserve as
-// much of the MBOX file details as feasible.  The user may wish to pass the
-// data through strings.TrimSpace before relying on any values if whitespace is
-// to be ignored.
+// Upstream returned a map from header name to values, which lost the order of
+// the headers; this fork keeps the lines.
 //func (m *Message) Headers() map[string][]string {
 func (m *Message) Headers() []string {
     return m.headers

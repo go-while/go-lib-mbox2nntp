@@ -1,26 +1,27 @@
-// The mbox package provides support for reading legacy MBOX-family files.
-// Support for writing MBOX files remains unimplemented at this time.
+// Package mbox reads the mbox files of the archive.org Usenet backups, one
+// message at a time: the header lines in file order, and a reader for the body.
+// It is the parser behind github.com/go-while/mbox2nntp, and a fork of
+// github.com/sam-falvo/mbox.  Writing mbox files is not supported.
 //
-// According to Wikipedia (https://en.wikipedia.org/wiki/Mbox), at least four
-// different kinds of mutually incompatible MBOX formats exist:
+// It is not a general-purpose mbox reader.  A line separates two messages only
+// if it has one of a few known shapes, each taken from a collection that uses
+// it; README.md lists them, and they live in sepPatterns in mbox.go.  The classic
+// "From user@example.com Thu Dec  8 12:55:04 2016" line is not one of them:
+// Usenet articles quote "From " lines in their bodies unescaped, and a generic
+// rule would cut those articles in two.  NearMisses shows the body lines that
+// looked like a separator but were not taken as one; check it on one file of
+// each new collection.
 //
-//	* mboxo (described by RFC-4155)
-//	* mboxrd (providing a reversable >From escaping semantics)
-//	* mboxcl (as mboxo, but which honors the Content-Length MIME header)
-//	* mboxcl2 (as mboxcl, but which does not escape From lines)
+// Headers are returned as found, apart from two repairs listed in README.md.
+// Bodies are returned line by line with their original line endings; nothing
+// is decoded, Content-Length is ignored, and ">From " is not un-escaped.
 //
-// This mbox package should be able to handle all four kinds of mailbox files;
-// however, due to the vaguarities of the MBOX family, some of the burden for
-// proper decoding must rest with your client software.  For example, mbox
-// ignores any Content-Length MIME headers, and performs absolutely minimal
-// amounts of processing of the headers so as to not discard potentially useful
-// information.  It further will not reverse any >From-escaping that might have
-// occured when the file was written.
+// Using mbox involves creating an io.Reader for the mbox file, then submitting
+// that to CreateMboxStream.  Then call ReadMessage for each message, and read
+// its body to io.EOF before calling ReadMessage again.  The stream is
+// sequential; no means of seeking exists.
 //
-// Using mbox involves creating an io.Reader for the MBOX file, then submitting
-// that to the CreateMboxStream() function.  Then, for each message in the MBOX
-// file, read that message and process as appropriate.
+// The import path and the package name differ:
 //
-// Note: at this time, no means of seeking through the file exists.  Your
-// software must process messages in a sequential, batch-oriented manner.
+//	import mbox "github.com/go-while/go-lib-mbox2nntp"
 package mbox
