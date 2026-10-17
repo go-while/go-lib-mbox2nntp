@@ -3,8 +3,10 @@
 package mbox
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -1223,5 +1225,57 @@ func TestFinalLineWithoutNewline(t *testing.T) {
 	}
 	if _, err := mr.ReadMessage(); err == nil {
 		t.Error("headers cut off by EOF: ReadMessage returned no error")
+	}
+}
+
+// The package writes nothing to the standard logger: its callers log the
+// errors it returns, with their own prefixes. It used to log a line per
+// message ("parseHeaders m.prefetch[0] == newline, break"), one per stream
+// ("MboxStream nextline error: err='EOF'"), and every error a second time.
+func TestNoLogging(t *testing.T) {
+	var buf bytes.Buffer
+	w, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(w); log.SetFlags(flags) })
+
+	const good = "From nobody Thu Dec  8 12:55:04 2016\nSubject: one\n\nbody one\n\n" +
+		"From nobody Thu Dec  8 12:55:05 2016\nSubject: two\n\nbody two\n"
+	const bad = "From nobody Thu Dec  8 12:55:04 2016\nSubject: one\nno colon here\n\nbody one\n\n" +
+		"From nobody Thu Dec  8 12:55:05 2016\nSubject: two\n\nbody two\n"
+	read := func(in string) (n int, errs []error) {
+		mr, err := CreateMboxStream(strings.NewReader(in))
+		if err != nil {
+			return 0, []error{err}
+		}
+		for {
+			msg, err := mr.ReadMessage()
+			if err == io.EOF {
+				return n, errs
+			}
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			io.Copy(io.Discard, msg.BodyReader())
+			n++
+		}
+	}
+	if n, errs := read(good); n != 2 || len(errs) != 0 {
+		t.Errorf("good mbox: %d messages, errors %v", n, errs)
+	}
+	n, errs := read(bad)
+	if n != 1 || len(errs) != 1 {
+		t.Fatalf("bad mbox: %d messages, errors %v; want 1 and 1", n, errs)
+	}
+	// what the log line added is in the error now: the line number first, as
+	// before, then the offending line and the separator of the message
+	if e := errs[0].Error(); !strings.HasPrefix(e, "3:") || !strings.Contains(e, "no colon here") ||
+		!strings.Contains(e, "nobody Thu Dec  8 12:55:04 2016") {
+		t.Errorf("header error %q lacks the line number, the line or the separator", e)
+	}
+	read("")                     // empty input
+	read("not an mbox at all\n") // no separator on the first line
+	if buf.Len() != 0 {
+		t.Errorf("the package logged:\n%s", buf.String())
 	}
 }

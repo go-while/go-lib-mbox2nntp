@@ -169,12 +169,13 @@ The [godoc examples](mbox_test.go) (`ExampleMboxStream` and others) also run as 
 
 ### Logging
 
-The package logs to the standard `log` package:
-
-- parse errors, with the offending line;
-- one `MboxStream nextline error: err='EOF'` line at the end of every stream.
-
-To silence it, call `log.SetOutput(io.Discard)`, which silences your own logging as well.
+The package does not log. Everything it knows about a problem is in the error it
+returns: a header error carries the line number first, then the offending line and the
+separator of the message it cost, as in
+`3:parseHeader Colon not found ... (message "nobody Thu Dec  8 12:55:04 2016")`.
+Log those errors with your own prefix. Until October 2026 it also wrote to the standard
+`log` package: a line per message, one at the end of every stream, and each error a second
+time.
 
 ## Separator shapes
 

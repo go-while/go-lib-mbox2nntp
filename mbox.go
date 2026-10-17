@@ -9,7 +9,6 @@ import (
     "io"
     "strings"
     "regexp"
-    "log"
 )
 
 var (
@@ -161,7 +160,8 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     //log.Printf("DEBUG ReadMessage: parseHeaders")
     msg.headers, err = m.parseHeaders()
     if err != nil {
-        log.Printf("mbox.go ReadMessage: parseHeaders err='%v' msg='%v'", err, *msg)
+        // the line number stays first: callers compare and parse it
+        err = fmt.Errorf("%w (message %q)", err, msg.sendingAddress)
         msg = nil
         m.resync()
         return
@@ -170,7 +170,6 @@ func (m *MboxStream) ReadMessage() (msg *Message, err error) {
     //log.Printf("DEBUG ReadMessage: parseBlankline")
     err = m.parseBlankLine()
     if err != nil {
-        log.Printf("mbox.go ReadMessage: parseBlankline err=%v", err)
         msg = nil
         m.resync()
         return
@@ -288,7 +287,6 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
         //log.Printf("parseHeaders: key=%s values='%s' err='%v'", key, values, err)
         if err != nil {
             if isBlankLine(m.prefetch) {
-                log.Printf("parseHeaders m.prefetch[0] == newline, break")
                 break
             }
             //errstr := fmt.Sprintf("%v", err)
@@ -354,7 +352,6 @@ func (m *MboxStream) parseHeader() ([]string, error) {
     //values := []string{strings.TrimSpace(string(m.prefetch[k+1:]))}
     err := m.nextLine()
     if err != nil {
-        log.Printf("parseHeader m.nextLine err='%v'", err)
         return nil, err
     }
     //line = strings.Replace(line,"\r","",-1)
@@ -475,15 +472,11 @@ func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
 
     err = m.nextLine()
     if err != nil {
-        log.Printf("CreateMboxStream: nextLine err = %v", err)
         m = nil
         return
     }
 
     _, err = extractSendingAddress(m)
-    if err != nil {
-        log.Printf("CreateMboxStream: err = %v", err)
-    }
     return
 }
 
@@ -503,7 +496,6 @@ func (m *MboxStream) nextLine() error {
         sliceb, err = append(sliceb, '\n'), nil
     }
     if err != nil {
-        log.Printf("MboxStream nextline error: err='%v'", err)
         return err
     }
     line := string(sliceb)
