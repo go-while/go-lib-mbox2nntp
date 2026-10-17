@@ -8,10 +8,8 @@ import (
     "fmt"
     "io"
     "strings"
-    //"regexp"
+    "regexp"
     "log"
-    "github.com/dlclark/regexp2"
-
 )
 
 var (
@@ -19,8 +17,17 @@ var (
     //validid = regexp2.MustCompile(`^From\ `, 0)
     //validid = regexp2.MustCompile(`^From\ (MAILER-DAEMON\ |news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
     //validid = regexp2.MustCompile(`^From\ (news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`, 0)
-    validid = regexp2.MustCompile(strings.Join(sepPatterns, "|"), 0)
+    // The outer ^ is redundant, since every pattern has its own, but Go only
+    // sees the whole regex as anchored with it: without it a line that does
+    // not match is tried at every offset, 12 us instead of 0.5 us.
+    validid = regexp.MustCompile(`^(?:` + strings.Join(sepPatterns, "|") + `)`)
 )
+
+// ws is the whitespace class in sepPatterns.  validid was compiled with
+// github.com/dlclark/regexp2 until 2026, whose \s is unicode.IsSpace; Go's \s
+// is only [\t\n\f\r ].  \v, U+0085 and \p{Z} add what Go's lacks, so no line
+// changed verdict.  TestWSIsUnicodeIsSpace holds it to that.
+const ws = `[\s\v\x{85}\p{Z}]`
 
 // sepPatterns are the message-separator shapes validid accepts, one per
 // alternative.  Each must stay anchored to "^From " or "^#! rnews " (see
@@ -37,9 +44,9 @@ var sepPatterns = []string{
     `^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ `, // gmane: "From news@gmane.org Thu Dec  8 ..."
     `^From\ [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]`,         // usenet-clari: "From 191826460637372077"
     `^From\ -[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]`,        // usenet-clari: "From -191826460637372077"
-    `^From\ nobody\ [A-Z][a-z][a-z]\s+[0-9]`,                 // "From nobody Thu  8 Dec 2016"
+    `^From\ nobody\ [A-Z][a-z][a-z]` + ws + `+[0-9]`,          // "From nobody Thu  8 Dec 2016"
     `^From\ nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ `,      // gna-clari: "From nobody Thu Dec  8 12:55:04 2016"
-    `^From\ nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4}`, // "From nobody Thu Dec\t12:55:04 2016": no day; differs from the one above only when the gap is not one space
+    `^From\ nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]` + ws + `+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4}`, // "From nobody Thu Dec\t12:55:04 2016": no day; differs from the one above only when the gap is not one space
 }
 
 // Every alternative in validid is anchored to "^From " or "^#! rnews ", so a
@@ -48,9 +55,10 @@ var sepPatterns = []string{
 // of body lines that are not separators.
 //
 // This runs once per body line across the whole archive, so it is the hottest
-// path in the importer.  Measured on the ClariNet corpus: 1618 ns/op for the
-// regex alone, 14.5 ns/op gated on an ordinary body line, 866 ns/op gated on an
-// actual separator.
+// path in the importer.  go test -bench Validid, with Go's regexp (2026):
+// 15 ns/op gated on an ordinary body line, 0.9 us on a near-miss such as
+// "From Table 1", 1.3 us on an actual separator.  With regexp2 it was
+// 1.1 us on a non-matching line and 1.5 us on a separator.
 //
 // TestValididPrefixGate asserts the "cannot hide a match" property this relies
 // on; if you add an alternative to validid that is not anchored to one of these
@@ -213,7 +221,7 @@ func extractSendingAddress(m *MboxStream) (who string, err error) {
     if !couldBeSep(m.prefetch) {
         return "", io.EOF
     }
-    if retbool, err := validid.MatchString(string(m.prefetch)); !retbool || err != nil {
+    if !validid.Match(m.prefetch) {
         return "", io.EOF
     }
     if m.prefetchLength < 6 {
@@ -444,7 +452,7 @@ func isBlankLine(p []byte) bool {
 func (m *MboxStream) resync() {
     for {
         if couldBeSep(m.prefetch) {
-            if ok, err := validid.MatchString(string(m.prefetch)); ok && err == nil {
+            if validid.Match(m.prefetch) {
                 return
             }
         }

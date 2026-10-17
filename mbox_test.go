@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/dlclark/regexp2"
+	"unicode"
 )
 
 // NOTE ON FIXTURES
@@ -645,12 +645,7 @@ func TestValididSeparatorShapes(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got, err := validid.MatchString(c.line)
-		if err != nil {
-			t.Errorf("validid.MatchString(%q): unexpected error %v", c.line, err)
-			continue
-		}
-		if got != c.accept {
+		if got := validid.MatchString(c.line); got != c.accept {
 			t.Errorf("validid.MatchString(%q) = %v, want %v (%s)", c.line, got, c.accept, c.note)
 		}
 	}
@@ -713,12 +708,7 @@ var acceptedShapes = []string{
 // prefixes, this test fails and couldBeSep must be widened to match.
 func TestValididPrefixGate(t *testing.T) {
 	for _, line := range gateCorpus {
-		matched, err := validid.MatchString(line)
-		if err != nil {
-			t.Errorf("validid.MatchString(%q): unexpected error %v", line, err)
-			continue
-		}
-		if matched && !couldBeSep([]byte(line)) {
+		if validid.MatchString(line) && !couldBeSep([]byte(line)) {
 			t.Errorf("gate would hide a match: %q", line)
 		}
 	}
@@ -739,18 +729,10 @@ func TestValididGateIsTransparent(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		want, err := validid.MatchString(line)
-		if err != nil {
-			t.Errorf("validid.MatchString(%q): unexpected error %v", line, err)
-			continue
-		}
+		want := validid.MatchString(line)
 		got := false
 		if couldBeSep([]byte(line)) {
-			got, err = validid.MatchString(line)
-			if err != nil {
-				t.Errorf("gated validid.MatchString(%q): unexpected error %v", line, err)
-				continue
-			}
+			got = validid.MatchString(line)
 		}
 		if got != want {
 			t.Errorf("gated verdict for %q = %v, bare regex = %v", line, got, want)
@@ -766,12 +748,7 @@ func TestValididMinimumMatchLength(t *testing.T) {
 	const shortest = 10
 	for _, full := range acceptedShapes {
 		for i := 0; i < shortest && i <= len(full); i++ {
-			matched, err := validid.MatchString(full[:i])
-			if err != nil {
-				t.Errorf("validid.MatchString(%q): unexpected error %v", full[:i], err)
-				continue
-			}
-			if matched {
+			if validid.MatchString(full[:i]) {
 				t.Errorf("validid matched %q (%d bytes); shortest match was assumed to be %d bytes",
 					full[:i], i, shortest)
 			}
@@ -781,25 +758,19 @@ func TestValididMinimumMatchLength(t *testing.T) {
 
 // The benchmarks below mirror what the call sites actually do: both
 // extractSendingAddress and bodyReader.Read hold the line as []byte in
-// m.prefetch and convert it to a string to feed the regex.  So the bare and
-// gated variants are given the same []byte input and both pay for that
-// conversion where it happens, which makes the pair comparable.
-//
-// The gate's win is twofold on an ordinary body line: the regex never runs, and
-// the string conversion that feeds it never happens either, so the allocation
-// goes away with it.
+// m.prefetch and match it with validid.Match.  On an ordinary body line the
+// gate keeps the regex from running at all.
 
 var (
 	benchBodyLine  = []byte("> quoted text from a previous article")
+	benchNearMiss  = []byte("From Table 1 we see that the results differ")
 	benchSeparator = []byte("From nobody Thu Dec  8 12:55:04 2016")
 )
 
 func benchBare(b *testing.B, line []byte) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := validid.MatchString(string(line)); err != nil {
-			b.Fatal(err)
-		}
+		validid.Match(line)
 	}
 }
 
@@ -807,15 +778,14 @@ func benchGated(b *testing.B, line []byte) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if couldBeSep(line) {
-			if _, err := validid.MatchString(string(line)); err != nil {
-				b.Fatal(err)
-			}
+			validid.Match(line)
 		}
 	}
 }
 
 func BenchmarkValididBareBodyLine(b *testing.B)   { benchBare(b, benchBodyLine) }
 func BenchmarkValididGatedBodyLine(b *testing.B)  { benchGated(b, benchBodyLine) }
+func BenchmarkValididGatedNearMiss(b *testing.B)  { benchGated(b, benchNearMiss) }
 func BenchmarkValididBareSeparator(b *testing.B)  { benchBare(b, benchSeparator) }
 func BenchmarkValididGatedSeparator(b *testing.B) { benchGated(b, benchSeparator) }
 
@@ -1168,7 +1138,8 @@ func TestResyncAfterMalformedHeaders(t *testing.T) {
 const valididBeforeJ5 = `^#\!\ rnews\ [0-9]+|^From\ MAILER-DAEMON\ |^From\ news@gmane\.org\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |^From\ ([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]|nobody\ [A-Z][a-z][a-z]\s+[0-9]|nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\ |nobody\ [A-Z][a-z][a-z]\ [A-Z][a-z][a-z]\s+[0-9]{1,2}\:[0-9]{1,2}\:[0-9]{1,2}\ [0-9]{4})`
 
 func TestSepPatternsMatchOldValidid(t *testing.T) {
-	old := regexp2.MustCompile(valididBeforeJ5, 0)
+	// valididBeforeJ5 was written for regexp2, whose \s is ws.
+	old := regexp.MustCompile(strings.ReplaceAll(valididBeforeJ5, `\s`, ws))
 	lines := append([]string{}, gateCorpus...)
 	lines = append(lines,
 		"From MAILER-DAEMON I got this bounce:",
@@ -1197,13 +1168,22 @@ func TestSepPatternsMatchOldValidid(t *testing.T) {
 		}
 	}
 	for _, line := range lines {
-		want, err1 := old.MatchString(line)
-		got, err2 := validid.MatchString(line)
-		if err1 != nil || err2 != nil {
-			t.Fatalf("%q: errors %v, %v", line, err1, err2)
-		}
-		if got != want {
+		if got, want := validid.MatchString(line), old.MatchString(line); got != want {
 			t.Errorf("validid(%q) = %v, before J5 it was %v", line, got, want)
+		}
+	}
+}
+
+// ws must match what \s matched in regexp2, which compiled validid until
+// 2026: exactly the runes unicode.IsSpace reports.
+func TestWSIsUnicodeIsSpace(t *testing.T) {
+	re := regexp.MustCompile(`^` + ws + `$`)
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue // surrogates: not valid in a Go string
+		}
+		if got := re.MatchString(string(r)); got != unicode.IsSpace(r) {
+			t.Errorf("ws matches %U: %v, unicode.IsSpace: %v", r, got, unicode.IsSpace(r))
 		}
 	}
 }

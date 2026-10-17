@@ -28,7 +28,7 @@ The import path and the package name differ, so give the import a name:
 import mbox "github.com/go-while/go-lib-mbox2nntp"
 ```
 
-The only dependency is `github.com/dlclark/regexp2`.
+It has no dependencies outside the Go standard library.
 
 ## Example
 

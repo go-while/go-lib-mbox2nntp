@@ -6,7 +6,6 @@ import (
     "io"
     //"log"
     //"regexp"
-    //"github.com/dlclark/regexp2"
 
 )
 
@@ -78,8 +77,7 @@ func (r *bodyReader) Read(bs []byte) (n int, err error) {
 
 
     // couldBeSep (mbox.go) is a byte-prefix gate in front of validid; it cannot
-    // hide a match, and it keeps the regex -- and the string conversion that
-    // feeds it -- off every ordinary body line.  It also replaces the old
+    // hide a match, and it keeps the regex off every ordinary body line.  It also replaces the old
     // len(prefetch) > 6 guard, which was left over from a prefetch[0:5] slice
     // that no longer exists: no shape validid accepts is shorter than 10 bytes,
     // so that bound never did anything.
@@ -88,10 +86,10 @@ func (r *bodyReader) Read(bs []byte) (n int, err error) {
     // several Read calls with r.where > 0; prefetch has not changed, so the
     // verdict cannot either, and re-testing would count a near-miss twice.
     if r.where == 0 && couldBeSep(r.mbox.prefetch) {
-        if retbool, err := validid.MatchString(string(r.mbox.prefetch)); retbool == true && err == nil {
+        if validid.Match(r.mbox.prefetch) {
             //log.Printf("message.go Read() validid.MatchString str='%s'", string(r.mbox.prefetch))
             return 0, io.EOF
-        } else if err == nil {
+        } else {
             // Passed the gate, failed the regex: this line stays in the body.
             r.mbox.recordNearMiss()
         }
