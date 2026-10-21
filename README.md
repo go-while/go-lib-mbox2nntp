@@ -137,6 +137,10 @@ The [godoc examples](mbox_test.go) (`ExampleMboxStream` and others) also run as 
   parsed, for example a line with no colon. The stream has already moved to the next
   separator, so call `ReadMessage` again. Error text starts with the line number, as in
   `3:parseHeader Colon not found ...`. Stop if the same error comes back twice in a row.
+- **`ErrLineTooLong` ends the stream.** A line longer than `MaxLineLength` (64 MiB,
+  line ending included) is not read. `ReadMessage` and the body reader return the error,
+  wrapped with the line number, from then on; test it with `errors.Is`. Set
+  `MaxLineLength` before reading to change the limit.
 - **`io.EOF` does not prove the whole file was read.** A stream that loses its place,
   for example after an unread body or a read error, ends early with the same `io.EOF`. To
   tell, wrap the reader you pass to `CreateMboxStream` and check that it returned `io.EOF`
@@ -155,12 +159,15 @@ The [godoc examples](mbox_test.go) (`ExampleMboxStream` and others) also run as 
   and `x-no-archive; yes` becomes `x-no-archive: yes`.
 - The block ends at the first blank line, LF or CRLF. Nothing else is changed or
   decoded.
+- A separator also ends the block. The message then has headers and an empty body, and
+  the separator starts the next message. A separator in place of the first header line is
+  an error that costs this message.
 
 ### Bodies
 
 - Each `Read` returns at most one line, with its line ending as in the file (`\n` or
-  `\r\n`). A line longer than the buffer comes back over several `Read` calls. Lines of any
-  length are read whole.
+  `\r\n`). A line longer than the buffer comes back over several `Read` calls. Lines up to
+  `MaxLineLength` are read whole.
 - The last line of a file that does not end in a newline gets `\n` added.
 - The blank line in front of the next separator is part of this body.
 - `>From ` lines are not un-escaped. The archive.org collections measured so far are not

@@ -4,6 +4,7 @@ package mbox
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1277,5 +1278,122 @@ func TestNoLogging(t *testing.T) {
 	read("not an mbox at all\n") // no separator on the first line
 	if buf.Len() != 0 {
 		t.Errorf("the package logged:\n%s", buf.String())
+	}
+}
+
+// A message with headers and no body, followed directly by the next
+// separator. The gna-clari separator has a colon in its time of day, so it
+// used to be read as one more header line, and both messages came out as one.
+func TestHeaderOnlyMessage(t *testing.T) {
+	const gna = "From nobody Thu Dec  8 12:55:04 2016\n"
+	const clari = "From -7666732389843091161\n"
+	cases := []struct {
+		name    string
+		input   string
+		want    []string
+		skipped int
+	}{
+		{"gna", gna + "Subject: one\nMessage-ID: <1@x>\n" +
+			gna + "Subject: two\nMessage-ID: <2@x>\n\nbody\n",
+			[]string{"one", "two"}, 0},
+		{"continuation", gna + "Subject: one\n\tfolded\n" +
+			gna + "Subject: two\n\nbody\n",
+			[]string{"one", "two"}, 0},
+		// this one used to cost the first message: a parse error
+		{"clari", clari + "Subject: one\n" +
+			clari + "Subject: two\n\nbody\n",
+			[]string{"one", "two"}, 0},
+		{"rnews", "#! rnews 10\nSubject: one\n#! rnews 20\nSubject: two\n\nbody\n",
+			[]string{"one", "two"}, 0},
+		{"no headers", gna + gna + "Subject: two\n\nbody\n",
+			[]string{"two"}, 1},
+	}
+	for _, c := range cases {
+		mr, err := CreateMboxStream(strings.NewReader(c.input))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		subjects, skipped := readAll(t, mr)
+		if !sameStrings(subjects, c.want) || skipped != c.skipped {
+			t.Errorf("%s: read %q, skipped %d; want %q, %d", c.name, subjects, skipped, c.want, c.skipped)
+		}
+	}
+
+	mr, err := CreateMboxStream(strings.NewReader(gna + "Subject: one\nMessage-ID: <1@x>\n" + gna + "Subject: two\n\nbody\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mr.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Subject: one", "Message-ID: <1@x>"}; !sameStrings(msg.Headers(), want) {
+		t.Errorf("headers = %q, want %q", msg.Headers(), want)
+	}
+	if body, err := io.ReadAll(msg.BodyReader()); err != nil || len(body) != 0 {
+		t.Errorf("body = %q, %v; want empty", body, err)
+	}
+}
+
+func setMaxLineLength(t *testing.T, n int) {
+	old := MaxLineLength
+	MaxLineLength = n
+	t.Cleanup(func() { MaxLineLength = old })
+}
+
+// A line over MaxLineLength ends the stream with ErrLineTooLong, in the
+// headers or in the body, instead of being read whole.
+func TestLineTooLong(t *testing.T) {
+	setMaxLineLength(t, 10000)
+	const sep = "From nobody Thu Dec  8 12:55:04 2016\n"
+	long := strings.Repeat("x", 10000) + "\n" // 10001 bytes with its newline
+	fits := strings.Repeat("y", 9999) + "\n"
+
+	// one under the limit, over several buffer reads, comes back whole
+	mr, err := CreateMboxStream(strings.NewReader(sep + "Subject: one\n\n" + fits + sep + "Subject: two\n\nbody\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mr.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := io.ReadAll(msg.BodyReader()); err != nil || string(body) != fits {
+		t.Errorf("body: %d bytes, %v; want %d bytes", len(body), err, len(fits))
+	}
+	if msg, err = mr.ReadMessage(); err != nil || strings.TrimSpace(headerValue(msg.Headers(), "Subject")) != "two" {
+		t.Errorf("second message: %v", err)
+	}
+
+	for _, c := range []struct{ name, input string }{
+		{"body", sep + "Subject: one\n\nfirst\n" + long + "last\n" + sep + "Subject: two\n\nbody\n"},
+		{"header", sep + "Subject: one\nX-Long: " + long + "\nbody\n" + sep + "Subject: two\n\nbody\n"},
+		{"separator", sep + "Subject: one\n\nbody\n" + sep[:len(sep)-1] + long},
+	} {
+		mr, err := CreateMboxStream(strings.NewReader(c.input))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		var last error
+		for i := 0; i < 10 && last == nil; i++ {
+			msg, err := mr.ReadMessage()
+			if err != nil {
+				last = err
+				break
+			}
+			_, last = io.ReadAll(msg.BodyReader())
+		}
+		if !errors.Is(last, ErrLineTooLong) {
+			t.Errorf("%s: got %v, want ErrLineTooLong", c.name, last)
+			continue
+		}
+		// and it stays: no io.EOF that would look like the end of the file
+		if _, err := mr.ReadMessage(); !errors.Is(err, ErrLineTooLong) {
+			t.Errorf("%s: then ReadMessage = %v, want ErrLineTooLong", c.name, err)
+		}
+	}
+
+	if _, err := CreateMboxStream(strings.NewReader(long)); !errors.Is(err, ErrLineTooLong) {
+		t.Errorf("first line too long: %v", err)
 	}
 }

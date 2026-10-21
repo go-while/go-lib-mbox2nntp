@@ -5,6 +5,7 @@ package mbox
 import (
     "bufio"
     "bytes"
+    "errors"
     "fmt"
     "io"
     "strings"
@@ -71,6 +72,21 @@ func couldBeSep(p []byte) bool {
     return bytes.HasPrefix(p, sepFrom) || bytes.HasPrefix(p, sepRnews)
 }
 
+// isSep reports whether p is a message separator.
+func isSep(p []byte) bool {
+    return couldBeSep(p) && validid.Match(p)
+}
+
+// MaxLineLength is the longest input line the parser accepts, line ending
+// included.  A longer one is not mail or news but a broken or hostile file,
+// and reading it whole could take all memory.  Set it before reading.
+var MaxLineLength = 64 << 20
+
+// ErrLineTooLong is returned, wrapped with the line number, for a line over
+// MaxLineLength.  It ends the stream: ReadMessage and the body reader return
+// it from then on.
+var ErrLineTooLong = errors.New("line too long")
+
 // MboxStream objects represent sequential streams of e-mail messages that
 // exist in the MBOX format.
 type MboxStream struct {
@@ -78,6 +94,7 @@ type MboxStream struct {
     prefetchLength int
     currentLine    int
     r              *bufio.Reader
+    err            error // a line over MaxLineLength, returned from then on
 
     nearMisses     int
     nearMissSample []NearMiss
@@ -142,6 +159,9 @@ func (m *MboxStream) recordNearMiss() {
 // stream is moved on to the next separator line, so the caller may skip the
 // error and call ReadMessage again to carry on with the next message.
 func (m *MboxStream) ReadMessage() (msg *Message, err error) {
+    if m.err != nil {
+        return nil, m.err
+    }
     var h []string
     msg = &Message{
         mbox:    m,
@@ -189,7 +209,13 @@ func (m *MboxStream) errorf(format string, args ...interface{}) error {
 // parseBlankLine will succeed only if the current line of the mbox file is a
 // blank line.  Blank lines are required by the MBOX format conventions to separate
 // MIME headers from message content.
+//
+// A separator ends a message that has headers and no body: it is left for the
+// next ReadMessage.
 func (m *MboxStream) parseBlankLine() error {
+    if isSep(m.prefetch) {
+        return nil
+    }
     // DEBUG
     //log.Printf("parseBlankLine m.prefetch len=%d", len(m.prefetch))
 
@@ -281,6 +307,14 @@ func (m *MboxStream) parseHeaders() ([]string, error) {
     //hs = make(map[string][]string, 0)
     var head []string
     for {
+        // A separator has a colon in the time of day, so parseHeader would
+        // take it as a header line, and the next message's headers too.
+        if isSep(m.prefetch) {
+            if len(head) == 0 {
+                return nil, m.errorf("parseHeaders no header before the next separator")
+            }
+            break
+        }
         //key, values, err := m.parseHeader()
         lines, err := m.parseHeader()
         // debug
@@ -448,10 +482,8 @@ func isBlankLine(p []byte) bool {
 // returns io.EOF, silently ending the file there.
 func (m *MboxStream) resync() {
     for {
-        if couldBeSep(m.prefetch) {
-            if validid.Match(m.prefetch) {
-                return
-            }
+        if isSep(m.prefetch) {
+            return
         }
         if m.nextLine() != nil {
             return
@@ -487,37 +519,39 @@ func CreateMboxStream(s io.Reader) (m *MboxStream, err error) {
 // - Attempting to read past the end of the input stream yields io.EOF.
 // - All other errors are reported as necessary.
 func (m *MboxStream) nextLine() error {
-    sliceb, err := m.r.ReadBytes('\n')
-    //line, err := m.r.ReadSlice('\n')
-    if err == io.EOF && len(sliceb) > 0 {
-        // The last line of a file that does not end in a newline. It used
-        // to be dropped along with the error; terminate it like the others.
-        // The next call gets io.EOF with nothing read.
-        sliceb, err = append(sliceb, '\n'), nil
+    if m.err != nil {
+        return m.err
     }
-    if err != nil {
-        return err
+    // Read straight into prefetch, a buffer's worth at a time, so that a
+    // line over MaxLineLength is refused before it is held whole.
+    m.prefetch = m.prefetch[:0]
+    for {
+        frag, err := m.r.ReadSlice('\n')
+        if len(m.prefetch)+len(frag) > MaxLineLength {
+            m.err = fmt.Errorf("%d:%w (over %d bytes)", m.currentLine+1, ErrLineTooLong, MaxLineLength)
+            m.prefetch = m.prefetch[:0]
+            m.prefetchLength = 0
+            return m.err
+        }
+        m.prefetch = append(m.prefetch, frag...)
+        if err == bufio.ErrBufferFull {
+            continue
+        }
+        if err == io.EOF && len(m.prefetch) > 0 {
+            // The last line of a file that does not end in a newline. It used
+            // to be dropped along with the error; terminate it like the others.
+            // The next call gets io.EOF with nothing read.
+            m.prefetch, err = append(m.prefetch, '\n'), nil
+        }
+        if err != nil {
+            if len(m.prefetch) == 0 {
+                // nothing read: keep the last line, as before
+                m.prefetch = m.prefetch[:m.prefetchLength]
+            }
+            return err
+        }
+        break
     }
-    line := string(sliceb)
-    /*
-    if len(line) >= 1 {
-        switch(line[len(line)-1]) { // switch last char in line
-            case '\n':
-                line = strings.TrimRight(line, "\n")
-            case '\r':
-                line = strings.TrimRight(line, "\r")
-        } // end switch
-    }*/
-    // DEBUG
-    //log.Printf("MboxStream nextLine() line='%s' i=%d", line, m.currentLine)
-
-
-    // If slice is longer than the original prefetch, resize.
-    if len(line) > cap(m.prefetch) {
-        m.prefetch = make([]byte, len(line))
-    }
-    m.prefetch = m.prefetch[0:len(line)]
-    copy(m.prefetch, line)
     m.prefetchLength = len(m.prefetch)
     m.currentLine++
     return nil
