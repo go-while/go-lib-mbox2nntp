@@ -59,8 +59,10 @@ var sepPatterns = []string{
 // any word as the sender would otherwise let prose such as "From x Thu Dec
 // 8 12:55:04 2016 on, ..." split a body.  Checked on the archive.org
 // corpus (5.28 million messages) before it was added: it changed no
-// message there.
-const rfc4155 = `^From\ [^\s]+\ (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\ [\ 0-3][0-9]\ [0-2][0-9]\:[0-5][0-9]\:[0-6][0-9]\ [0-9]{4}\r?\n?$`
+// message there.  The year has 1 to 4 digits: Python's asctime and
+// usenet_archiver do not pad it, so a Date in year 100 (the Y2K bug in
+// old newsreaders) gives "... 10:00:00 100".
+const rfc4155 = `^From\ [^\s]+\ (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\ (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\ [\ 0-3][0-9]\ [0-2][0-9]\:[0-5][0-9]\:[0-6][0-9]\ [0-9]{1,4}\r?\n?$`
 
 // Every alternative in validid is anchored to "^From " or "^#! rnews ", so a
 // line starting with neither cannot possibly match.  couldBeSep checks that in

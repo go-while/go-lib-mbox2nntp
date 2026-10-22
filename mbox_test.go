@@ -635,6 +635,8 @@ func TestValididSeparatorShapes(t *testing.T) {
 		{"From mailer-daemon Thu Dec 18 12:55:04 2016", true, "RFC 4155, lowercase daemon"},
 		{"From ???@??? Thu Dec 08 12:55:04 2016", true, "RFC 4155, Eudora/Pine shape, day with 0"},
 		{"From - Thu Dec  8 12:55:04 2016", true, "RFC 4155, '-' for an unknown sender (usenet_archiver)"},
+		{"From a@b.example Fri Jan  1 10:00:00 100", true, "RFC 4155, year 100 unpadded (Y2K bug, usenet_archiver)"},
+		{"From a@b.example Mon Jan  1 00:00:00 1", true, "RFC 4155, year 1"},
 
 		// False positives: body text that will be mistaken for a separator.
 		{"From MAILER-DAEMON I got this bounce:", true, "FALSE POSITIVE, truncates body"},
@@ -651,7 +653,7 @@ func TestValididSeparatorShapes(t *testing.T) {
 		{"From user@domain.com Thu Dec  8 12:55:04 2016 on, it was different", false, "text after the date"},
 		{"From a friend Thu Dec  8 12:55:04 2016", false, "sender of two words"},
 		{"From user@domain.com thu dec  8 12:55:04 2016", false, "lowercase day and month"},
-		{"From user@domain.com Thu Dec  8 12:55:04 16", false, "two-digit year"},
+		{"From user@domain.com Thu Dec  8 12:55:04 20160", false, "five-digit year"},
 		{"From user@domain.com Thu Dec 8 12:55:04 2016", false, "day not padded"},
 
 		// Correctly rejected.
