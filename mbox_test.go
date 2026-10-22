@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -628,6 +629,12 @@ func TestValididSeparatorShapes(t *testing.T) {
 		{"From -191826460637372077", true, "usenet-clari, signed"},
 		{"From nobody Thu Dec  8 12:55:04 2016", true, "gna-clari"},
 		{"From nobody Thu  8 Dec 2016", true, "day before month"},
+		{"From user@domain.com Thu Dec  8 12:55:04 2016", true, "RFC 4155, classic mbox separator"},
+		{"From user@domain.com Thu Dec  8 12:55:04 2016\n", true, "RFC 4155, with its line end"},
+		{"From user@domain.com Thu Dec  8 12:55:04 2016\r\n", true, "RFC 4155, CRLF"},
+		{"From mailer-daemon Thu Dec 18 12:55:04 2016", true, "RFC 4155, lowercase daemon"},
+		{"From ???@??? Thu Dec 08 12:55:04 2016", true, "RFC 4155, Eudora/Pine shape, day with 0"},
+		{"From - Thu Dec  8 12:55:04 2016", true, "RFC 4155, '-' for an unknown sender (usenet_archiver)"},
 
 		// False positives: body text that will be mistaken for a separator.
 		{"From MAILER-DAEMON I got this bounce:", true, "FALSE POSITIVE, truncates body"},
@@ -635,10 +642,17 @@ func TestValididSeparatorShapes(t *testing.T) {
 
 		// Gaps: real separator shapes this fork will not accept.
 		{"From foo@bar.com", false, "GAP, upstream's own fixture shape"},
-		{"From user@domain.com Thu Dec  8 12:55:04 2016", false, "GAP, classic mbox separator"},
-		{"From mailer-daemon Thu Dec  8 12:55:04 2016", false, "GAP, lowercase daemon"},
-		{"From ???@??? Thu Dec  8 12:55:04 2016", false, "GAP, Eudora/Pine shape"},
 		{"From 1234567", false, "GAP, 7-digit id, needs 8"},
+		{"From user@domain.com Thu Dec  8 12:55:04 GMT 2016", false, "GAP, RFC 4155 with a time zone"},
+		{"From user@domain.com Thu Dec  8 12:55 2016", false, "GAP, RFC 4155 without seconds"},
+
+		// RFC 4155 shape, but not the whole line or not quite the shape:
+		// prose, which must not split a body.
+		{"From user@domain.com Thu Dec  8 12:55:04 2016 on, it was different", false, "text after the date"},
+		{"From a friend Thu Dec  8 12:55:04 2016", false, "sender of two words"},
+		{"From user@domain.com thu dec  8 12:55:04 2016", false, "lowercase day and month"},
+		{"From user@domain.com Thu Dec  8 12:55:04 16", false, "two-digit year"},
+		{"From user@domain.com Thu Dec 8 12:55:04 2016", false, "day not padded"},
 
 		// Correctly rejected.
 		{" From nobody Thu Dec  8 12:55:04 2016", false, "leading whitespace"},
@@ -665,11 +679,13 @@ var gateCorpus = []string{
 	"From -191826460637372077",
 	"From nobody Thu Dec  8 12:55:04 2016",
 
+	"From user@domain.com Thu Dec  8 12:55:04 2016",
+	"From mailer-daemon Thu Dec  8 12:55:04 2016",
+
 	// "From "-prefixed lines validid nonetheless rejects: these are what the
 	// gate cannot help with, and what keeps it honest.
 	"From foo@bar.com",
-	"From user@domain.com Thu Dec  8 12:55:04 2016",
-	"From mailer-daemon Thu Dec  8 12:55:04 2016",
+	"From user@domain.com Thu Dec  8 12:55:04 2016 on, it was different",
 	"From 1234567",
 	"From ",
 	"From x",
@@ -699,6 +715,7 @@ var acceptedShapes = []string{
 	"From 191826460637372077",
 	"From -191826460637372077",
 	"From nobody Thu Dec  8 12:55:04 2016",
+	"From user@domain.com Thu Dec  8 12:55:04 2016",
 }
 
 // TestValididPrefixGate proves that gating validid behind a cheap byte-prefix
@@ -820,7 +837,7 @@ const mboxWithNearMisses = `From nobody Thu Dec  8 12:55:04 2016
 Subject: one
 
 From here on, everything is different.
-From user@domain.com Thu Dec  8 12:55:04 2016
+From foo@bar.com
 Subject: merged
 
 #! rnews abc
@@ -850,7 +867,7 @@ func TestNearMisses(t *testing.T) {
 		count, samples := mr.NearMisses()
 		want := []NearMiss{
 			{4, "From here on, everything is different."},
-			{5, "From user@domain.com Thu Dec  8 12:55:04 2016"},
+			{5, "From foo@bar.com"},
 			{8, "#! rnews abc"},
 		}
 		// With an 8-byte buffer every line above spans several Read calls,
@@ -1170,9 +1187,11 @@ func TestSepPatternsMatchOldValidid(t *testing.T) {
 			t.Errorf("pattern %q is not anchored to a prefix couldBeSep knows", p)
 		}
 	}
+	// the RFC 4155 alternative, added after J5, is the one intended change
+	added := regexp.MustCompile(rfc4155)
 	for _, line := range lines {
-		if got, want := validid.MatchString(line), old.MatchString(line); got != want {
-			t.Errorf("validid(%q) = %v, before J5 it was %v", line, got, want)
+		if got, want := validid.MatchString(line), old.MatchString(line) || added.MatchString(line); got != want {
+			t.Errorf("validid(%q) = %v, before J5 it was %v (and the RFC 4155 shape says %v)", line, got, old.MatchString(line), added.MatchString(line))
 		}
 	}
 }
@@ -1395,5 +1414,51 @@ func TestLineTooLong(t *testing.T) {
 
 	if _, err := CreateMboxStream(strings.NewReader(long)); !errors.Is(err, ErrLineTooLong) {
 		t.Errorf("first line too long: %v", err)
+	}
+}
+
+// An mbox as most writers make it, with RFC 4155 separator lines (here as
+// usenet_archiver and Python's mailbox write them), is read message by
+// message, LF or CRLF, and a body line with the shape but more text after
+// the date stays in its body.
+func TestRFC4155Mbox(t *testing.T) {
+	const in = "From a@b.example Thu Dec  8 12:55:04 2016\n" +
+		"Subject: one\nMessage-ID: <1@x>\n\n" +
+		"From a@b.example Thu Dec  8 12:55:04 2016 on, the body went on.\n\n" +
+		"From - Fri Dec  9 01:02:03 2016\n" +
+		"Subject: two\nMessage-ID: <2@x>\n\nbody two\n\n" +
+		"From MAILER-DAEMON Sat Dec 10 23:59:59 2016\n" +
+		"Subject: three\nMessage-ID: <3@x>\n\nbody three\n"
+	for name, data := range map[string]string{"LF": in, "CRLF": strings.ReplaceAll(in, "\n", "\r\n")} {
+		mr, err := CreateMboxStream(strings.NewReader(data))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var subjects []string
+		var first string
+		for {
+			m, err := mr.ReadMessage()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			b, _ := io.ReadAll(m.BodyReader())
+			for _, h := range m.Headers() {
+				if v, ok := strings.CutPrefix(h, "Subject: "); ok {
+					subjects = append(subjects, v)
+				}
+			}
+			if first == "" {
+				first = string(b)
+			}
+		}
+		if want := []string{"one", "two", "three"}; !slices.Equal(subjects, want) {
+			t.Errorf("%s: subjects %q, want %q", name, subjects, want)
+		}
+		if !strings.Contains(first, "on, the body went on.") {
+			t.Errorf("%s: first body %q lost its prose line", name, first)
+		}
 	}
 }

@@ -11,9 +11,10 @@ map, which loses their order and repeats; here they are kept as the lines of the
 
 **This is not a general-purpose mbox reader.** A line counts as a message separator only if
 it has one of the [shapes listed below](#separator-shapes), each taken from an archive
-collection that uses it. The classic `From user@example.com Thu Dec  8 12:55:04 2016` line
-is *not* one of them. Usenet articles quote `From ` lines in their bodies unescaped, and a
-generic rule cuts those articles in two. To read a collection with another separator,
+collection or writer that uses it. Usenet articles quote `From ` lines in their bodies
+unescaped, and a generic rule cuts those articles in two. The classic line most mbox
+writers use, `From user@example.com Thu Dec  8 12:55:04 2016` (RFC 4155), is accepted, but
+only as a whole line exactly in that form. To read a collection with another separator,
 [add its shape](#adding-a-separator-shape).
 
 ## Install
@@ -197,9 +198,10 @@ These are the patterns in `sepPatterns` in [mbox.go](mbox.go):
 | `From -` and 8 or more digits | `From -191826460637372077` | usenet-clari |
 | `From nobody Ddd Mmm ...` | `From nobody Thu Dec  8 12:55:04 2016` | gna-clari, the `usenet-*` items |
 | `From nobody Ddd D...` | `From nobody Fri 23 Oct 2020 05:16:14 AM CEST` | the `FULL-USENET-BACKUP-*` items |
+| `From SENDER Ddd Mmm DD hh:mm:ss YYYY`, the whole line | `From user@example.com Thu Dec  8 12:55:04 2016` | RFC 4155: mutt, Thunderbird, Python's `mailbox`, usenet_archiver |
 
-Only the start of a line is tested, so a few body lines are mistaken for separators and
-cut their article short. Two examples are `From MAILER-DAEMON I got this bounce:` and
+Apart from the RFC 4155 shape, only the start of a line is tested, so a few body lines are
+mistaken for separators and cut their article short. Two examples are `From MAILER-DAEMON I got this bounce:` and
 `From nobody Thu 3 people replied`. `TestValididSeparatorShapes` lists these, and the shapes
 that are not accepted.
 
@@ -210,8 +212,8 @@ shape, so it stayed in the body. `NearMisses()` returns the count for the stream
 and the first five lines with their line numbers.
 
 - In ordinary text near-misses are normal, such as `From Table 1 we see`.
-- If the samples look like separators (`From someone@example.com Thu Dec  8 ...`), the file
-  uses a shape this package does not know. Every message after such a separator was merged
+- If the samples look like separators (`From someone@example.com Thu Dec  8 12:55 2016`), the
+  file uses a shape this package does not know. Every message after such a separator was merged
   into the one before it.
 
 Check one file from each new collection before importing it. `mbox2nntp -dry-run FILE`
