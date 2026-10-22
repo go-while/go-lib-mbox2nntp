@@ -137,7 +137,7 @@ The [godoc examples](mbox_test.go) (`ExampleMboxStream` and others) also run as 
   parsed, for example a line with no colon. The stream has already moved to the next
   separator, so call `ReadMessage` again. Error text starts with the line number, as in
   `3:parseHeader Colon not found ...`. Stop if the same error comes back twice in a row.
-- **`ErrLineTooLong` ends the stream.** A line longer than `MaxLineLength` (64 MiB,
+- **`ErrLineTooLong` ends the stream.** A line longer than `MaxLineLength` (1 MiB,
   line ending included) is not read. `ReadMessage` and the body reader return the error,
   wrapped with the line number, from then on; test it with `errors.Is`. Set
   `MaxLineLength` before reading to change the limit.

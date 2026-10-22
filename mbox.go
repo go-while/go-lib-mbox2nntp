@@ -80,7 +80,10 @@ func isSep(p []byte) bool {
 // MaxLineLength is the longest input line the parser accepts, line ending
 // included.  A longer one is not mail or news but a broken or hostile file,
 // and reading it whole could take all memory.  Set it before reading.
-var MaxLineLength = 64 << 20
+//
+// The longest line in the archive.org corpus (458 million lines) is 9,991
+// bytes; a text article is rarely allowed more than 256 KB in all.
+var MaxLineLength = 1 << 20
 
 // ErrLineTooLong is returned, wrapped with the line number, for a line over
 // MaxLineLength.  It ends the stream: ReadMessage and the body reader return
